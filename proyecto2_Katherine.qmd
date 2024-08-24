@@ -1,0 +1,237 @@
+---
+title: "Proyecto Final"
+author: "Katherine Gómez López"
+format:
+  html:
+    code-fold: true
+    theme: cosmo
+---
+
+## Introducción
+
+En este proyecto se hace una extracción de datos mediante el metodo de **Scraping** , para luego poder crear unos graficos
+donde se pueda analizar la información de una mejor manera.
+
+```{python}
+#Importar bibliotecas
+import pandas as pd
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+import time
+import os
+
+# Inicializar driver
+driver = webdriver.Firefox()
+
+# Definir URL para el scraping
+url = "https://www.scrapethissite.com/pages/forms"
+
+# Navegamos a la página
+driver.get(url)  
+
+# Inicializar lista vacia
+datos = []
+
+# Función para extraer datos
+def extraer_datos():
+    equipos = driver.find_elements(By.CLASS_NAME, "team")
+    for equipo in equipos:
+        nombre = equipo.find_element(By.CLASS_NAME, "name").text
+        anio = equipo.find_element(By.CLASS_NAME, "year").text
+        victorias = equipo.find_element(By.CLASS_NAME, "wins").text
+        derrotas = equipo.find_element(By.CLASS_NAME, "losses").text
+        derrotas_tiempo_extra = equipo.find_element(By.CLASS_NAME, "ot-losses").text
+        porcentaje_victorias = equipo.find_element(By.CLASS_NAME, "pct").text
+        goles_favor = equipo.find_element(By.CLASS_NAME, "gf").text
+        goles_contra = equipo.find_element(By.CLASS_NAME, "ga").text
+        gol_diferencia = equipo.find_element(By.CLASS_NAME, "diff").text
+        
+        datos.append({
+        "Nombre": nombre,
+        "Año": anio,
+        "Victorias": victorias,
+        "Derrotas": derrotas,
+        "Derrotas Tiempo Extra": derrotas_tiempo_extra,
+        "% Victorias": porcentaje_victorias,
+        "Goles a favor": goles_favor,
+        "Goles en contra": goles_contra,
+        "Gol diferencia": gol_diferencia
+        })   
+
+# Extraer datos de todas las páginas
+while True:
+    # Esperar a que la tabla se cargue
+    WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.CLASS_NAME, "team")))
+    
+    # Extraer datos de la página actual
+    extraer_datos()
+    
+    # Intentar ir a la siguiente página
+    try:
+        next_button = WebDriverWait(driver, 10).until(
+            EC.element_to_be_clickable((By.XPATH, "//a[@aria-label='Next']"))
+        )
+        if "disabled" in next_button.get_attribute("class"):
+            break
+        next_button.click()
+        time.sleep(2)  # Esperar a que la página se cargue
+    except:
+        break  # Si no hay botón "Next", hemos terminado
+
+# Agregar los datos al DataFrame
+df = pd.DataFrame(datos)
+
+# Cerrar el navegador
+driver.quit()
+
+# Pasar el dataframe a un archivo tipo .csv
+df.to_csv("hockey_teams_data.csv", index=False)
+
+```
+
+```{python}
+# Desarrollo de API
+
+import sqlite3
+from flask import Flask, jsonify
+import os
+import sys
+
+app = Flask(__name__)
+def inicializar_bd():
+    """
+    Inicializa la base de datos leyendo un archivo CSV y creando una tabla SQL.
+    """
+    try:
+        directorio_actual = os.path.abspath(sys.argv[0])
+        os.chdir(directorio_actual)
+        # Lee el archivo CSV
+        df = pd.read_csv('hockey_teams_data.csv')
+        # Conecta a la base de datos SQLite
+        conn = sqlite3.connect('hockey.db')
+        # Crea la tabla 'Teams' a partir del DataFrame
+        df.to_sql('Teams', conn, if_exists='replace', index=False)
+        conn.close()
+        print("Base de datos inicializada exitosamente")
+    except Exception as e:
+        print(f"Error al inicializar la base de datos: {str(e)}")
+
+# Inicializa la base de datos al inicio
+inicializar_bd()
+
+def obtener_conexion_bd():
+    """
+    Establece y retorna una conexión a la base de datos.
+    """
+    return sqlite3.connect('hockey.db')
+
+
+@app.route('/year/<year>', methods=['GET'])
+def obtener_por_anio(year):
+    """
+    Maneja la solicitud GET para obtener la información de todos los equipos del año indicado.
+    """
+    conn = obtener_conexion_bd()
+    try:
+        # Ejecuta la consulta SQL para obtener los equipos por año
+        resultado = conn.execute("SELECT * FROM Teams WHERE [Año] = ?", (year,)).fetchall()
+        if resultado: 
+            # Obtiene los nombres de las columnas
+            columnas = [description[0] for description in conn.execute("SELECT * FROM Teams LIMIT 1").description]
+            # Convierte cada fila en un diccionario
+            equipos = [dict(zip(columnas, row)) for row in resultado]
+            return jsonify(equipos)
+        else:
+            return jsonify({"error": "No se encontraron equipos para el año indicado"}), 404
+    finally:
+        conn.close()
+
+if __name__ == '__main__':
+    # Inicia la aplicación Flask
+    app.run(debug=False, port=5000)
+
+# Ejecutar Flask en segundo plano
+from threading import Thread
+server = Thread(target=lambda: app.run(debug=False, use_reloader=False))
+server.start()
+```
+```{python}
+
+#Consumir el endpoint y transformarlos a formato pandas
+
+import pandas as pd
+import requests
+
+# URL del endpoint de la API
+url = 'http://localhost:5000/equipos'
+
+# Realizar la solicitud GET
+response = requests.get(url)
+
+# Verificar que la solicitud fue exitosa
+if response.status_code == 200:
+    # Convertir los datos JSON a un DataFrame de Pandas
+    data = response.json()
+    df = pd.DataFrame(data)
+    
+    # Guardar el DataFrame como un archivo CSV
+    df.to_csv('hockey_teams_2011.csv', index=False)
+    
+    # Mostrar las primeras filas del DataFrame
+    print(df.head())
+
+```
+```{python}
+import requests
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+url = 'http://127.0.0.1:5000/equipos'
+response = requests.get(url)
+
+if response.status_code == 200:
+    datos = response.json()
+    df = pd.DataFrame(datos)
+else:
+    print("Error al consumir la API")
+    df = pd.DataFrame()
+
+if not df.empty:
+
+    top_10_equipos = dataset.nlargest(10, 'Goles a favor')
+    df_equipos = top_10_equipos(id_vars="Nombre", value_vars['goles_favor', 'goles_contra'],
+                                var_name='Tipo de goles', value_name='Cantidad')
+    plt.title('10 Mejores equipos')
+    plt.show()
+
+    # Inicializar la figura
+    plt.figure(figsize=(10, 6))
+    sns.scatterplot(x='goles_favor', y='goles_contra', data=dataset)
+    plt.title('Relación entre goles a favor y goles en contra')
+    plt.xlabel('Goles a favor')
+    plt.ylabel('Goles en contra')
+    plt.show()
+
+    # Gráfico de Distribución
+    plt.figure(figsize=(10, 6))
+    sns.histplot(df['goles_favor'], kde=True)
+    plt.title('Distribución de los goles a favor')
+    plt.xlabel('Goles a favor')
+    plt.show()
+
+    plt.figure(figzise=(10,6))
+    sns.barplot(x='Nombre', y='Cantidad', hue='Tipo de Goles', data=df_equipos,
+                palette={'Goles a favor': 'blue', 'Goles en contra':'lighgreen'}, ax=ax)
+    plt.title(Goles a favor y en contra)
+    plt.xlabel("Equipo")
+    plt.ylabel("Cantidad de goles")
+    plt.show()
+```
+
+## Reflexión
+Con este trabajo me quebrado un poco la cabeza, peo en fin el análisis y la limpieza que se hace por medio del scraping,
+despues utilizar el flask, para que en quarto se pueda hacer una visualización más eficiente de la información, hace
+que todo lo desarrollado en clases valga la pena.
+https://github.com/KthyGL/Proyecto_Final.git
